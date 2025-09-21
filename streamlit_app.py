@@ -276,16 +276,57 @@ with tabs[0]:
     df_pm = remove_future_dates(df_pm, date_col="year")
 
     st.sidebar.header("공개 데이터 설정")
-    years = sorted(df_pm["year"].unique()) if "year" in df_pm.columns else []
+     years = sorted(df_pm["year"].unique()) if "year" in df_pm.columns else []
     if len(years) == 0:
         st.warning("표시할 연도 데이터가 없습니다.")
+        year_choice = None # year_choice가 None이 될 수 있도록 초기화
+    elif len(years) == 1:
+        # 연도가 하나뿐일 경우 슬라이더 대신 해당 연도를 표시
+        year_choice = years[0]
+        st.sidebar.write(f"선택 가능 연도: **{year_choice}** (데이터가 하나의 연도만 포함합니다.)")
+        animate = False # 애니메이션 비활성화
+        st.sidebar.checkbox("연도 애니메이션(가능한 경우)", value=False, disabled=True) # 체크박스 비활성화
     else:
+        # 연도가 두 개 이상일 경우 정상적으로 슬라이더 표시
         year_min, year_max = int(min(years)), int(max(years))
         year_choice = st.sidebar.slider("연도 선택", year_min, year_max, year_max)
         animate = st.sidebar.checkbox("연도 애니메이션(가능한 경우)", value=True)
+
+    # 이 아래는 year_choice가 유효할 때만 실행
+    if year_choice is not None:
         vmin = st.sidebar.number_input("컬러 최소값(µg/m³)", value=0.0, format="%.1f")
         vmax = st.sidebar.number_input("컬러 최대값(µg/m³)", value=60.0, format="%.1f")
         st.sidebar.download_button("처리된 공개 데이터 다운로드 (CSV)", data=df_pm.to_csv(index=False).encode("utf-8"), file_name="owid_pm25_processed.csv", mime="text/csv")
+
+        if animate and df_pm["year"].nunique() > 1: # 애니메이션 조건도 2개 이상의 연도일 때만 작동하도록 수정
+            fig = px.choropleth(
+                df_pm,
+                locations="iso_alpha",
+                color="value",
+                hover_name="country",
+                animation_frame="year",
+                range_color=(vmin, vmax),
+                labels={"value":"PM2.5 µg/m³"},
+                projection="natural earth"
+            )
+            fig.update_layout(coloraxis_colorbar=dict(title="PM2.5 µg/m³"))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            df_sel = df_pm[df_pm["year"] == int(year_choice)]
+            if df_sel.empty:
+                st.warning("선택한 연도에 데이터가 없습니다.")
+            else:
+                fig = px.choropleth(
+                    df_sel,
+                    locations="iso_alpha",
+                    color="value",
+                    hover_name="country",
+                    range_color=(vmin, vmax),
+                    labels={"value":"PM2.5 µg/m³"},
+                    projection="natural earth"
+                )
+                fig.update_layout(title_text=f"PM2.5 평균 노출 {year_choice}", coloraxis_colorbar=dict(title="PM2.5 µg/m³"))
+                st.plotly_chart(fig, use_container_width=True)
 
         if animate and df_pm["year"].nunique() > 1:
             fig = px.choropleth(
