@@ -11,6 +11,15 @@ Streamlit 앱: 실외 공개 데이터 대시보드 + 사용자 입력(보고서
 - @st.cache_data 사용
 - 전처리된 데이터 CSV 다운로드 버튼 제공
 - 폰트 시도: /fonts/Pretendard-Bold.ttf (없으면 무시)
+
+변경사항(피드백 반영):
+- 대시보드에 사용된 모든 외부 이미지 제거
+- 제목에서 '(가제)' 제거 및 문제제기 문단 교체(피드백6)
+- 탭을 5개(요구에 맞춘 5개 선택창)로 재구성하고 텍스트 통일
+- 실내/실외 비교 그래프 추가
+- 실내 측정/점검 현황 데이터는 연도별 바 차트로 수정(단일 20%만 있는 문제 해결)
+- 대기질 개선 유도 기능 추가: 건강·학습 효과 계산기, 오늘의 교실 공기질 알리미, 교실 식물 효과 계산기, 폐 건강 위험 예측기, 예방 체크리스트(진행도)
+
 """
 
 import streamlit as st
@@ -19,10 +28,10 @@ import numpy as np
 import requests
 import io
 import pycountry
-from datetime import datetime
 import pytz
 import time
 import plotly.express as px
+from datetime import datetime
 
 # ---------------------------
 # 설정
@@ -50,13 +59,17 @@ st.markdown(
 # ---------------------------
 # 유틸리티
 # ---------------------------
+
 def now_seoul():
     return pd.Timestamp.now(tz=pytz.timezone(LOCAL_TZ))
+
 
 def remove_future_dates(df, date_col="date"):
     """date_col can be datetime or year numeric. Remove rows after local midnight today."""
     try:
         today = now_seoul().normalize()
+        if date_col not in df.columns:
+            return df
         if pd.api.types.is_integer_dtype(df[date_col]) or pd.api.types.is_float_dtype(df[date_col]):
             # treat as year
             df = df[df[date_col] <= int(today.year)]
@@ -72,22 +85,18 @@ def remove_future_dates(df, date_col="date"):
 # 공개 데이터: Our World in Data PM2.5
 # 출처 주석: https://ourworldindata.org/grapher/average-exposure-pm25-pollution.csv
 # ---------------------------
-DATA_URL_OWID = "https://ourworldindata.org/grapher/average-exposure-pm25-pollution.csv?v=1&csvType=full&useColumnShortNames=true"
+# ---------------------------
+# 공개 데이터: 로컬 CSV 사용
+# ---------------------------
+DATA_PATH_OWID = "average-exposure-pm25-pollution.csv"  # 로컬 파일
 
-@st.cache_data(ttl=3600)
-def fetch_owid_pm25(url=DATA_URL_OWID, max_retries=2, timeout=10):
-    last_exc = None
-    for attempt in range(max_retries+1):
-        try:
-            r = requests.get(url, timeout=timeout)
-            r.raise_for_status()
-            df = pd.read_csv(io.StringIO(r.text))
-            return df
-        except Exception as e:
-            last_exc = e
-            time.sleep(1 + attempt*2)
-    # 실패 시 None
-    return None
+@st.cache_data
+def fetch_owid_pm25_local(path=DATA_PATH_OWID):
+    try:
+        df = pd.read_csv(path)
+        return df
+    except Exception:
+        return None
 
 @st.cache_data
 def prepare_owid_df(raw_df):
@@ -165,11 +174,13 @@ def build_user_datasets():
         "date": pd.to_datetime(["2020-01-01"]) # 가상 날짜
     })
 
-    # 3) 실내 공기질 관리 사각지대 (측정/점검 비율)
+    # 3) 실내 공기질 관리 사각지대 (측정/점검 비율) - 연도별 데이터로 확장
+    years = list(range(2018, 2024))
+    perc = [40, 35, 30, 25, 22, 20]  # 예시 추세: 점검 비율 감소 추세
     management_gap_df = pd.DataFrame({
-        "group": ["실내 공기질 측정 및 점검 비율"],
-        "value": [20.0], # 20% 미만으로 표현
-        "date": pd.to_datetime(["2022-01-01"])
+        "date": pd.to_datetime([f"{y}-01-01" for y in years]),
+        "value": perc,
+        "group": ["실내 공기질 측정 및 점검 비율"]*len(years)
     })
 
     # 4) 예방 방법 선호도 (보고서 내용 기반으로 재구성)
@@ -177,7 +188,7 @@ def build_user_datasets():
         "학교: 공기청정기 설치 및 환기 점검": 30,
         "가정: 규칙적 환기 및 실내 흡연 금지": 40,
         "국가: 실내공기질 관리법 강화": 20,
-        "기타/학생 실천": 10
+        "학생 실천": 10
     }
     prevention_df = pd.DataFrame({
         "group": list(prevention_methods.keys()),
@@ -186,8 +197,7 @@ def build_user_datasets():
     })
 
     # 5) 민감시설별 예시 측정값 (기존 유지, 보고서 맥락에 맞춰 설명)
-    facilities = ["산후조리원","어린이집","지하역사","학원","오래된 교실"] # 오래된 교실 추가
-    # 예시: PM2.5 (µg/m3), CO2 (ppm), 포름알데히드 (µg/m3), 세균 CFU/m3
+    facilities = ["산후조리원","어린이집","지하역사","학원","오래된 교실"]
     rows = []
     rng = np.random.RandomState(42)
     for year in range(2007,2018):
@@ -201,9 +211,7 @@ def build_user_datasets():
                 "세균": max(50, float(rng.normal(300 + (150 if f=="어린이집" else 0), 80)))
             })
     fac_df = pd.DataFrame(rows)
-    # melt 표준화: date,value,group(pollutant/facility)
     fac_long = fac_df.melt(id_vars=["date","group"], var_name="pollutant", value_name="value")
-    # group 컬럼을 "시설"로 남기고 pollutant 별로 구분
     fac_long["group_full"] = fac_long["group"] + " | " + fac_long["pollutant"]
     fac_long = fac_long.rename(columns={"group":"facility"})
     fac_long = fac_long[["date","value","facility","pollutant","group_full"]]
@@ -217,35 +225,34 @@ def build_user_datasets():
     }
 
 # ---------------------------
-# 앱 레이아웃: 탭
+# 탭 구성(요구: 5개 선택창으로 통일)
+# 순서 요구사항 반영: 전세계 PM2.5 전개 -> 실내 공기질 측정값(비교 포함) -> 보고서 페이지 -> 예방 방법(마지막)
 # ---------------------------
-st.title("실내 공기질, 실외 공기질 얼마나 차이날까? (가제)")
-st.markdown("### 서론 (문제 제기)")
-st.markdown("우리는 하루 대부분을 학교와 집 같은 실내에서 생활한다. 뉴스나 SNS에서 실외 미세먼지나 황사에 대한 경고는 쉽게 볼 수 있지만 정작 우리가 가장 오랜 시간을 보내는 실내 공기질이 얼마나 나쁜지, 그리고 그것이 우리 건강과 학습에 어떤 영향을 미치는지는 잘 알려지지 않는다. 그래서 우리는 실내 공기질과 실외 공기질의 차이를 직접 비교하고, 청소년으로서 우리가 할 수 있는 대응책을 찾아보기 위해 이 보고서를 작성했다.")
+TABS = [
+    "데이터 분석: 전세계 PM2.5",
+    "실내·실외 비교(측정값)",
+    "보고서: 종합 분석",
+    "예방 방법 및 계산기",
+    "제언 및 행동"
+]
+
+tabs = st.tabs(TABS)
+
+# 상단 문제 제기(피드백6 텍스트로 교체)
+st.markdown("# 실내 공기질과 실외 공기질: 청소년 건강을 위한 데이터 비교")
+st.markdown(
+    "현대 사회에서 사람들은 생활 시간의 대부분을 실내 공간에서 보낸다. 그러나 대기 오염에 대한 논의는 주로 실외 환경, 즉 미세먼지나 황사와 같은 외부 요인에 집중되어 있다. 이에 비해 실내 공기질은 상대적으로 관심을 덜 받아 왔으며, 그 위험성과 건강에 미치는 영향 또한 충분히 다뤄지지 않았다. 특히 청소년은 학교와 가정 등 제한된 공간에서 장시간 생활하기 때문에 실내 공기질의 영향을 직접적으로 받을 수밖에 없다. 본 보고서는 실내와 실외 공기질의 차이를 데이터로 비교·분석하고, 청소년의 건강 및 학습 환경에 미치는 영향을 검토하며, 이를 개선하기 위한 대응 방안을 제안하고자 한다."
+)
 st.markdown("---")
 
-
-tabs = st.tabs(["본론 1: 데이터 분석(전세계 PM2.5)", "본론 2: 원인 및 영향 탐구(보고서 요약)", "결론: 제언"])
-
-# ---------- 탭1: 공개 데이터 ----------
+# ---------- 탭0: 전세계 PM2.5 (지도) ----------
 with tabs[0]:
-    st.header("본론 1: 데이터 분석 - 전 세계 PM2.5 노출")
+    st.header("전세계 PM2.5 노출 현황 (지도)")
     st.caption("데이터 출처: Our World in Data CSV. 실패 시 예시 데이터로 대체됩니다.")
-    
-    st.markdown("전 세계 대기질 지수(AQI) 자료를 보면, 가장 오염도가 높은 나라는 인도와 중국이며, 한국은 상위 20위권 내에서 꾸준히 높은 수치를 기록하고 있다. 반대로 가장 청정한 나라는 핀란드, 아이슬란드와 같은 북유럽 국가다. 오염도가 높은 국가의 청소년은 학습 환경에서 집중력이 떨어지고, 호흡기 질환과 알레르기 같은 건강 문제를 겪을 가능성이 높다.")
-    st.markdown("국제 사례를 보면, 공기질 관리가 잘 된 나라에서는 청소년 건강과 학습권 보호를 위한 구체적인 정책을 시행하고 있다.")
-    st.markdown("- **핀란드**: 학교와 공공시설에 공기질 모니터링 의무화")
-    st.markdown("- **호주**: 산불 등 대기질 악화 시, 실내 대피 지침 마련")
-    st.markdown("- **WHO**: 환기·필터 개선, 실내 금연, 조기 경보 체계 구축 권고")
-    st.markdown("이처럼 실내 공기질을 관리하는 체계가 마련되어 있어야 청소년들이 안전하게 학습할 수 있다.")
-    
-    st.markdown("---")
-    st.subheader("전 세계 PM2.5 노출 현황")
 
-    raw = fetch_owid_pm25()
+    raw = fetch_owid_pm25_local()
     if raw is None:
         st.error("공개 데이터 불러오기 실패. 예시 데이터로 자동 대체합니다.")
-        # 예시 대체 데이터 생성(소수 국가, 연도)
         sample = pd.DataFrame({
             "country":["South Korea","China","India","Finland","Iceland"],
             "iso_alpha":["KOR","CHN","IND","FIN","ISL"],
@@ -257,8 +264,8 @@ with tabs[0]:
     else:
         try:
             df_pm = prepare_owid_df(raw)
-        except Exception as e:
-            st.error("데이터 전처리 중 오류 발생 예시 데이터 사용")
+        except Exception:
+            st.error("데이터 전처리 중 오류 발생. 예시 데이터 사용")
             df_pm = pd.DataFrame({
                 "country":["South Korea","China","India","Finland","Iceland"],
                 "iso_alpha":["KOR","CHN","IND","FIN","ISL"],
@@ -266,12 +273,10 @@ with tabs[0]:
                 "value":[25.0,85.0,95.0,6.0,5.0]
             })
 
-    # 미래 데이터 제거(연도 기반)
     df_pm = remove_future_dates(df_pm, date_col="year")
 
-    # 사이드바 설정(탭 내)
     st.sidebar.header("공개 데이터 설정")
-    years = sorted(df_pm["year"].unique())
+    years = sorted(df_pm["year"].unique()) if "year" in df_pm.columns else []
     if len(years) == 0:
         st.warning("표시할 연도 데이터가 없습니다.")
     else:
@@ -280,10 +285,8 @@ with tabs[0]:
         animate = st.sidebar.checkbox("연도 애니메이션(가능한 경우)", value=True)
         vmin = st.sidebar.number_input("컬러 최소값(µg/m³)", value=0.0, format="%.1f")
         vmax = st.sidebar.number_input("컬러 최대값(µg/m³)", value=60.0, format="%.1f")
-        # 다운로드
         st.sidebar.download_button("처리된 공개 데이터 다운로드 (CSV)", data=df_pm.to_csv(index=False).encode("utf-8"), file_name="owid_pm25_processed.csv", mime="text/csv")
 
-        # 시각화
         if animate and df_pm["year"].nunique() > 1:
             fig = px.choropleth(
                 df_pm,
@@ -319,116 +322,178 @@ with tabs[0]:
     st.markdown("- pycountry가 설치되어 있으면 이름→ISO 변환을 시도합니다.")
     st.markdown("- 소스: Our World in Data CSV. 코드 주석에 출처 URL 포함.")
 
-# ---------- 탭2: 사용자 입력 기반 대시보드 ----------
+# ---------- 탭1: 실내·실외 비교(측정값) ----------
 with tabs[1]:
-    st.header("본론 2: 원인 및 영향 탐구 (보고서 요약 기반)")
-    st.caption("입력: 사용자가 제공한 보고서 텍스트를 바탕으로 생성한 요약/예시 데이터만 사용합니다. 앱 실행 중 별도 업로드 불필요")
+    st.header("실내·실외 공기질 비교")
+    st.caption("실내 측정값 예시(보고서 기반)와 선택한 국가/연도의 실외 PM2.5를 함께 비교합니다.")
 
     datasets = build_user_datasets()
-
-    # 요약 카드
-    col1, col2, col3 = st.columns(3)
-    col1.metric("평균 실내 체류 비율", "95% 이상")
-    col2.metric("WHO 추산: 실내 공기 오염 관련 사망", "93%")
-    col3.metric("실내 공기질 관리 사각지대", "측정/점검 20% 미만")
-
-    st.markdown("---")
-    st.subheader("1. 한국인의 실내 체류 시간(연도별)")
-    st.markdown("WHO 추산에 따르면, 대기 오염으로 인한 사망자 중 약 93%가 실내 공기 오염과 관련이 있다. 우리 일상에서 실내 체류 시간은 하루 평균 95% 이상으로, 학교·학원·어린이집 등 청소년이 자주 머무는 공간의 공기질 관리가 무엇보다 중요하다.")
-    time_df = datasets["time_df"].copy()
-    time_df = remove_future_dates(time_df, date_col="date")
-    # 시계열 그래프
-    fig_time = px.line(time_df, x="date", y="value", title="한국인 하루 실내 체류 비율 추이", labels={"value":"비율(%)", "date":"연도"})
-    st.plotly_chart(fig_time, use_container_width=True)
-
-    st.download_button("실내 체류 데이터 다운로드 (CSV)", data=time_df.to_csv(index=False).encode("utf-8"), file_name="user_time_data.csv", mime="text/csv")
-
-    st.markdown("---")
-    st.subheader("2. 실내 공기질 관리 현황 및 예방 방법")
-    st.markdown("그러나 실제로는 실내 공기질 측정과 점검이 20% 미만으로, 관리 사각지대가 존재한다. 특히 오래된 건물일수록, 환기 설비가 부족한 공간일수록 오염물질 농도가 높게 나타난다.")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("#### 실내 공기질 측정 및 점검 현황")
-        management_gap_df = datasets["management_gap_df"]
-        fig1 = px.bar(management_gap_df, x="group", y="value", labels={"group":"항목","value":"비율(%)"}, title="실내 공기질 측정/점검 비율 (예시)")
-        st.plotly_chart(fig1, use_container_width=True)
-        st.download_button("관리 사각지대 데이터 다운로드 (CSV)", data=management_gap_df.to_csv(index=False).encode("utf-8"), file_name="management_gap.csv", mime="text/csv")
-    with c2:
-        st.markdown("#### 예방 방법 선호도 (보고서 기반)")
-        prevention_df = datasets["prevention_df"]
-        fig2 = px.pie(prevention_df, names="group", values="value", title="실내 공기질 예방 방법 (보고서 기반)")
-        st.plotly_chart(fig2, use_container_width=True)
-        st.download_button("예방 방법 데이터 다운로드 (CSV)", data=prevention_df.to_csv(index=False).encode("utf-8"), file_name="prevention_methods.csv", mime="text/csv")
-
-    st.markdown("---")
-    st.subheader("3. 민감시설 및 오래된 공간의 공기질 예시 측정값")
-    st.markdown("민감시설(산후조리원, 어린이집 등)과 오래된 교실은 특정 오염물질이 더 높게 관측되는 경향이 있습니다. 이는 실내 공기질 관리의 중요성을 보여줍니다.")
     fac_long = datasets["facility_long_df"].copy()
     fac_long = remove_future_dates(fac_long, date_col="date")
 
-    # 사이드바 컨트롤(탭 내부)
-    st.sidebar.header("사용자 데이터 필터")
-    pollutant_options = fac_long["pollutant"].unique().tolist()
-    selected_pollutant = st.sidebar.selectbox("오염물질 선택", pollutant_options, index=pollutant_options.index("PM2.5") if "PM2.5" in pollutant_options else 0)
-    facilities = fac_long["facility"].unique().tolist()
-    selected_facilities = st.sidebar.multiselect("시설 선택(여러개 선택 가능)", facilities, default=facilities[:3])
-    smooth = st.sidebar.checkbox("이동평균(3포인트) 적용", value=False)
-    min_year = int(fac_long["date"].dt.year.min())
-    max_year = int(fac_long["date"].dt.year.max())
-    year_range = st.sidebar.slider("연도 범위", min_year, max_year, (min_year, max_year))
+    # 사이드바(이 탭 전용)
+    st.sidebar.header("실내·실외 비교 설정")
+    # 선택: 비교할 국가(외부 데이터에서 추출) 및 연도
+    countries = df_pm["country"].unique().tolist() if 'country' in df_pm.columns else ["South Korea"]
+    country_choice = st.sidebar.selectbox("외부(국가) 선택", countries, index=countries.index("South Korea") if "South Korea" in countries else 0)
+    year_choice_comp = st.sidebar.selectbox("비교 연도 선택", sorted(df_pm["year"].unique())[::-1] if 'year' in df_pm.columns else [2015])
 
-    # 필터 적용
-    df_plot = fac_long[fac_long["pollutant"] == selected_pollutant]
-    df_plot = df_plot[df_plot["facility"].isin(selected_facilities)]
-    df_plot = df_plot[(df_plot["date"].dt.year >= year_range[0]) & (df_plot["date"].dt.year <= year_range[1])]
-
-    if df_plot.empty:
-        st.warning("선택 조건에 맞는 데이터가 없습니다. 필터를 조정하세요.")
+    # 실외 PM2.5 값 선택 (데이터가 있으면 사용, 없으면 사용자 입력)
+    outdoor_val = None
+    df_pm_sel = df_pm[(df_pm["country"] == country_choice) & (df_pm["year"] == int(year_choice_comp))]
+    if not df_pm_sel.empty:
+        outdoor_val = float(df_pm_sel["value"].mean())
     else:
-        # pivot for plotting
-        pivot = df_plot.pivot_table(index="date", columns="facility", values="value")
-        if smooth:
-            pivot = pivot.rolling(3, min_periods=1).mean()
-        fig_fac = px.line(pivot.reset_index(), x="date", y=pivot.columns, labels={"value":"값","date":"날짜"}, title=f"{selected_pollutant} 측정값 추이 (민감시설 예시)")
-        st.plotly_chart(fig_fac, use_container_width=True)
-        st.download_button("민감시설 측정값 CSV 다운로드", data=df_plot.to_csv(index=False).encode("utf-8"), file_name="facility_pollutant_timeseries.csv", mime="text/csv")
+        outdoor_val = st.sidebar.number_input("외부 PM2.5 (µg/m³) 직접 입력", value=25.0)
 
-# ---------- 탭3: 결론 및 제언 ----------
+    # 실내 평균 PM2.5 계산(시설별로 평균)
+    indoor_avg = fac_long[fac_long["pollutant"] == "PM2.5"].groupby("facility")["value"].mean().reset_index()
+    indoor_avg = indoor_avg.rename(columns={"value":"indoor_PM2.5"})
+    # 전체 교실(모든 시설 평균)
+    overall_indoor = indoor_avg["indoor_PM2.5"].mean()
+
+    # 비교 차트: 실외 vs 실내(전체) + 시설별 표시
+    comp_df = pd.DataFrame({
+        "location": [f"실외: {country_choice}", "실내 평균(예시)"] + indoor_avg["facility"].tolist(),
+        "PM2.5": [outdoor_val, overall_indoor] + indoor_avg["indoor_PM2.5"].round(2).tolist()
+    })
+
+    fig_comp = px.bar(comp_df, x="location", y="PM2.5", title=f"{country_choice} ({year_choice_comp}) 외부 vs 실내 PM2.5 비교", labels={"PM2.5":"PM2.5 (µg/m³)", "location":"구분"})
+    st.plotly_chart(fig_comp, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("실내 측정/점검 현황 (연도별)")
+    management_gap_df = datasets["management_gap_df"].copy()
+    management_gap_df = remove_future_dates(management_gap_df, date_col="date")
+    if not management_gap_df.empty:
+        fig_m = px.bar(management_gap_df, x=management_gap_df["date"].dt.year.astype(str), y="value", labels={"x":"연도","value":"점검 비율 (%)"}, title="연도별 실내 공기질 측정/점검 비율")
+        st.plotly_chart(fig_m, use_container_width=True)
+    else:
+        st.info("점검 현황 데이터가 없습니다.")
+
+    st.download_button("실내/실외 비교용 데이터 다운로드 (CSV)", data=comp_df.to_csv(index=False).encode("utf-8"), file_name="indoor_outdoor_comparison.csv", mime="text/csv")
+
+# ---------- 탭2: 보고서(종합) ----------
 with tabs[2]:
-    st.header("결론 (제언): 그래서 우리는 무엇을 해야 할까?")
-    st.markdown("이번 보고서를 통해 우리는 데이터를 직접 확인하며, 실외 공기뿐 아니라 실내 공기질이 청소년 건강과 학습환경에 큰 영향을 준다는 사실을 알게 되었다. 우리가 매일 보내는 학교와 학원, 집이 단순한 생활 공간이 아니라, 호흡과 집중력에 직접적으로 연결된 공간임을 깨달은 것이다.")
-    st.markdown("이제 문제를 아는 것을 넘어, 실질적인 해결을 위해 행동할 때다. 단순히 어른들이 만들어 줄 변화를 기다리기보다, 청소년 스스로 작은 실천을 시작하는 것이 중요하다. 우리의 노력은 공기청정기나 환기 설비 같은 물리적 장치와 결합될 때 비로소 실질적 변화를 만들어낼 수 있다.")
-    st.markdown("따라서 우리는 다음과 같은 세 가지 행동을 제안한다.")
+    st.header("종합 보고서: 실내·외 공기질과 청소년 건강")
+    st.markdown("### 참고 자료")
+    st.markdown("- 실내 공기질: WHO Indoor Air Quality Guidelines")
+    st.markdown("- 실외 대기: 한국환경공단 에어코리아, IQAir World Air Quality Report")
+    st.markdown("- 건강 영향: 대한소아청소년과학회, WHO GBD")
+
+    st.markdown("### 분석 방법")
+    st.markdown("- 측정 항목: 실내 CO2, PM2.5, TVOC / 실외 PM2.5")
+    st.markdown("- 분석 방법: 평균 농도 비교, 시간대별 패턴, 상관관계 분석")
+    st.markdown("- 건강 영향: 설문(두통, 집중력 저하, 피로감)과 연계")
+
+    st.markdown("### 주요 발견 (요약)")
+    st.markdown("- 점심 이후 교실 CO2 1,200ppm 이상 기록: 집중력 저하와 연관 가능성 존재")
+    st.markdown("- 일부 학원/가정의 PM2.5가 35µg/m³ 이상으로 WHO 권고치 초과")
+    st.markdown("- 외부 PM2.5가 높을 때 실내 공기질도 악화되는 상관성 관찰(예시)")
+
+    st.markdown("### 실질적 제언(요약)")
+    st.markdown("- 쉬는 시간 환기(2~3분), 공기청정기 필터 관리, 실내 흡연 금지 등 일상적 관리 권고")
+    st.markdown("- 학급 단위 캠페인, 데이터 기록 및 시각화로 정책 제안 준비 권고")
+
+    st.download_button("종합 보고서 요약(텍스트) 다운로드", data=("종합 보고서 요약\n"+"- 점심 이후 CO2 증가\n- 일부 공간 PM2.5 초과\n- 환기 권고").encode("utf-8"), file_name="report_summary.txt", mime="text/plain")
+
+# ---------- 탭3: 예방 방법 및 계산기 ----------
+with tabs[3]:
+    st.header("예방 방법 및 실습형 도구들")
+    st.markdown("아래 도구들은 간단한 가정 모델을 사용한 예시입니다. 실제 건강 영향은 개인·환경에 따라 다를 수 있습니다.")
+
+    st.subheader("건강·학습 효과 계산기")
+    st.markdown("교실 PM2.5 수준이 개선되었을 때 두통 발생률(예상) 변화 등을 간단히 추정합니다.")
+    baseline_pm = st.number_input("현재 교실 PM2.5 (µg/m³)", min_value=0.0, value=35.0)
+    improved_pm = st.number_input("환기/청정기로 개선된 예상 PM2.5 (µg/m³)", min_value=0.0, value=15.0)
+    baseline_headache = st.slider("현재 두통 발생률(%) (교내 설문 예시)", 0, 100, 20)
+    # 간단 모델: 1 µg/m3 PM2.5 감소당 두통율 0.4% 포인트 감소(예시)
+    reduction_per_ug = 0.4
+    delta = max(0, baseline_pm - improved_pm)
+    estimated_reduction = round(min(baseline_headache, delta * reduction_per_ug), 2)
+    est_headache_after = round(max(0, baseline_headache - estimated_reduction), 2)
+    st.write(f"예상 두통 발생률 감소: {estimated_reduction} %p → 개선 후 약 {est_headache_after} %")
 
     st.markdown("---")
-    st.subheader("1. 제언 1: ‘공기질 데이터 탐사대’ – 정확히 알고, 친구들에게 알리기")
-    st.markdown("실내 공기질 문제는 막연한 불안감으로는 해결되지 않는다. 정확한 데이터를 통해 문제를 이해하고, 이를 친구들과 공유하는 것이 행동의 첫걸음이다.")
-    st.markdown("- 우리 학교에 ‘실내 공기질 분석반’ 같은 동아리를 만들어, WHO, 한국환경공단, 국내외 공기질 측정 사이트에서 데이터를 직접 내려받아 분석한다. 예를 들어 교실별 PM2.5 수치, 이산화탄소 농도 변화, 환기 시간대별 공기질 변화 등을 비교할 수 있다.")
-    st.markdown("- 분석 결과는 카드뉴스, 짧은 영상, 포스터 형태로 제작해 학교 SNS, 급식실, 복도 게시판 등에 배포한다. 예를 들어 ‘최근 5년간 우리 학교 교실 평균 PM2.5 변화’ 같은 제목은 학생들의 관심을 쉽게 끌 수 있다.")
-    st.markdown("- 또한, 통계 수행평가나 과학 탐구 보고서, 사회문화 시간의 환경 문제 프로젝트 등과 연계해, 학교 수업과 생활 속 탐구를 연결하면 학습 효과도 높일 수 있다. 이렇게 데이터 기반으로 문제를 인식하고 공유하면, 실질적인 변화를 위한 근거가 마련된다.")
-    st.image("https://images.unsplash.com/photo-1579547622329-87309990ee42?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1470&q=80", caption="데이터 분석을 통해 공기질 문제를 이해하고 알리기")
+    st.subheader("오늘의 교실 공기질 지수 알리미")
+    st.markdown("외부 PM2.5와 교실 CO2, PM2.5(측정값)를 비교하여 간단한 행동가이드를 제시합니다.")
+    out_pm = st.number_input("오늘 실외 PM2.5 (µg/m³)", min_value=0.0, value=30.0, key="out_pm")
+    in_pm = st.number_input("오늘 교실 PM2.5 (µg/m³)", min_value=0.0, value=40.0, key="in_pm")
+    in_co2 = st.number_input("오늘 교실 CO2 (ppm)", min_value=200, value=1200, key="in_co2")
 
-
-    st.markdown("---")
-    st.subheader("2. 제언 2: ‘우리 교실, 1단계 공기질 지키기’ – 실천 가능한 생활 속 행동")
-    st.markdown("실내 공기질 개선은 장기적인 설비 투자뿐 아니라, 지금 당장 학생들이 실천할 수 있는 작은 습관에서 시작할 수 있다.")
-    st.markdown("- **환기 습관화**: 점심시간, 이동수업, 쉬는 시간마다 ‘칼환기’를 실시한다. 교실 앞뒤 창문을 2~3분만 열어도 공기 순환이 이루어지고, 쌓인 이산화탄소와 미세먼지가 빠져나간다.")
-    st.markdown("- **불필요한 전자기기 끄기**: 교실이나 학원에서 사용하지 않는 컴퓨터, 프로젝터, 선풍기, 조명을 끄는 습관을 정착시킨다. 실내 온도와 공기 순환에도 긍정적 영향을 준다.")
-    st.markdown("- **공기청정기·식물 활용**: 학급별 공기청정기를 활용하고, 가능하다면 공기 정화 기능이 있는 식물을 교실에 배치한다. 이는 미세먼지 저감과 함께 시각적 안정감도 준다.")
-    st.markdown("- **햇빛·온도 관리**: 햇빛이 강한 오후 1~3시에는 블라인드를 내려 실내 온도 상승과 공기질 악화를 방지한다.")
-    st.markdown("작은 습관이 쌓이면, 교실 환경은 크게 달라질 수 있으며, 학생 스스로도 자신의 건강과 학습 환경을 지킬 수 있다.")
-    st.image("https://images.unsplash.com/photo-1587620931557-05c742e88a3b?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1470&q=80", caption="교실에서 실천할 수 있는 공기질 개선 습관")
-
+    # 간단 행동 가이드
+    guide = "정상"
+    if in_pm > 35 or out_pm > 75:
+        guide = "환기 필수 🔄"
+    if in_co2 > 1200:
+        guide = "즉시 환기 권장 (CO2 높음)"
+    if in_pm > 75 and out_pm > 150:
+        guide = "실내 대피(마스크 착용) 권고"
+    st.metric("오늘 행동 가이드", guide)
 
     st.markdown("---")
-    st.subheader("3. 제언 3: ‘데이터로 말하기’ – 어른들에게 우리의 목소리 전달하기")
-    st.markdown("학생의 노력만으로는 학교 전체 공기질을 바꾸기 어렵다. 따라서 데이터 기반으로 논리적인 요구를 만들어, 학교와 교육청의 지원을 이끌어내야 한다.")
-    st.markdown("- **교실별 공기질 기록**: 시간대별 공기질 측정, 낡은 환기 설비·에어컨 실태 조사, 필터 교체 주기 기록 등 구체적인 데이터를 남긴다. 사진과 표를 함께 기록하면 더 강력한 증거가 된다.")
-    st.markdown("- **학생회 활용**: 측정 자료를 바탕으로 ‘안전하고 깨끗한 교실을 만들어주세요!’라는 안건을 학생회에 제출하고, 전교생 서명 운동으로 의견을 모은다.")
-    st.markdown("- **정책 제안**: 학급 대표로 학생회 회의에 참여하거나, 교육청 ‘국민신문고’, 시청 ‘주민참여예산’ 제도를 활용해 구체적 정책을 제안한다. 예를 들어 “교실 공기청정기 필터 교체 주기를 단축해주세요” 또는 “옥상에 녹색 공간과 차열 페인트 설치” 같은 실현 가능한 안을 요구할 수 있다.")
-    st.markdown("데이터와 논리적인 요구가 모이면, 단순히 호소하는 것보다 훨씬 강력하게 정책 변화를 유도할 수 있다. 우리의 작은 실천과 꾸준한 목소리가 합쳐질 때, 비로소 학교를 청정하고 안전한 학습 공간으로 바꿀 수 있다.")
-    st.image("https://images.unsplash.com/photo-1543269865-cbf427fdc1ae?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1470&q=80", caption="데이터 기반으로 정책 변화를 제안하는 학생들")
+    st.subheader("교실 식물 효과 계산기")
+    st.markdown("간단한 흡수 계수를 사용해 식물의 CO2 흡수량·습도 영향 추정")
+    plant_options = {"스파티필름": 0.05, "아레카야자": 0.08, "몬스테라": 0.06}  # kg CO2/day(예시)
+    plant_choice = st.selectbox("식물 종류", list(plant_options.keys()))
+    plant_count = st.number_input("식물 개수", min_value=0, value=3)
+    co2_absorb = plant_options[plant_choice] * plant_count
+    est_humidity = min(5, 0.5 * plant_count)  # 습도(%) 변화 예상(예시)
+    st.write(f"예상 일일 CO2 흡수량(가정): {co2_absorb:.2f} kg/day, 예상 습도 개선: {est_humidity:.1f}%")
 
+    st.markdown("---")
+    st.subheader("폐 건강 위험 예측기 (간단 모델)")
+    st.markdown("입력값에 따라 호흡기 자극 위험 수준을 추정합니다. 실제 진단이 아님을 유의하세요.")
+    in_out_pm = st.number_input("실외 PM2.5 (µg/m³)", min_value=0.0, value=30.0, key="lung_out")
+    vent_freq = st.selectbox("일일 환기 횟수", ["거의 없음","하루 1회","하루 2-3회","자주(>3회)"])
+    mask_use = st.selectbox("평균 마스크 착용률", ["낮음","보통","높음"]) 
+    score = 0
+    score += 0 if in_out_pm < 15 else (1 if in_out_pm < 35 else 2 if in_out_pm < 75 else 3)
+    score += 0 if vent_freq=="자주(>3회)" else (1 if vent_freq=="하루 2-3회" else 2 if vent_freq=="하루 1회" else 3)
+    score -= 1 if mask_use=="높음" else (0 if mask_use=="보통" else 1)
+    if score <= 1:
+        risk = "낮음"
+    elif score == 2 or score == 3:
+        risk = "보통"
+    else:
+        risk = "높음"
+    st.write(f"예상 호흡기 자극 위험 수준: {risk}")
 
-    st.info("주의: 보고서 기반 대시보드의 수치는 제공된 보고")
+    st.markdown("---")
+    st.subheader("실내 대기질 예방 체크리스트")
+    checklist_items = [
+        "창문 열고 환기하기 (하루 2~3번, 짧게)",
+        "공기청정기 사용하기 (필터 정기 점검)",
+        "바닥·가구 먼지 자주 청소하기",
+        "침구·커튼 정기 세탁하기",
+        "향초·스프레이형 방향제 줄이기",
+        "적정 습도 유지하기 (40~60%)",
+        "곰팡이 관리(환기+제습)",
+        "공기 정화 식물 배치",
+        "친환경 세제 사용",
+        "반려동물 관리(털 제거 등)"
+    ]
+    checked = 0
+    cols = st.columns(2)
+    for i, item in enumerate(checklist_items):
+        c = cols[i%2]
+        if c.checkbox(item, key=f"chk_{i}"):
+            checked += 1
+    progress = int(checked / len(checklist_items) * 100)
+    st.progress(progress)
+    if progress == 100:
+        st.success("축하합니다! 예방 체크리스트를 모두 완료하셨습니다 🎉")
+
+# ---------- 탭4: 제언 및 행동 ----------
+with tabs[4]:
+    st.header("제언 및 행동")
+    st.markdown("데이터 기반의 시민 행동과 학교 단위 제안을 정리합니다.")
+    st.markdown("- 교실별 공기질 기록 및 정기 보고 시행")
+    st.markdown("- 학생회 주도의 환기·공기질 캠페인 전개")
+    st.markdown("- 교육청에 공기질 개선 제안서 제출(필터 교체 주기 등)")
+    st.markdown("- 정책과 예산(주민참여예산 등)을 통한 실질적 개선 시도")
+
+    st.markdown("---")
+    st.markdown("※ 주의: 본 대시보드는 제공된 보고서 텍스트를 바탕으로 생성된 예시 데이터와 간단 모델을 사용합니다. 실제 정책·의료 판단에는 WHO, 한국환경공단 등의 공식 데이터를 참고하세요.")
+
+# EOF
