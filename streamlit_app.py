@@ -1015,7 +1015,7 @@ with tabs[3]:
             exercise_scores = {"매일": -1, "주 3-4회": -0.5, "주 1-2회": 0, "거의 안함": 1}
             risk_score += exercise_scores[exercise]
             
-              # 위험도 기준 (사이드바에서 조정 가능)
+            # 위험도 기준 (사이드바에서 조정 가능)
             low_threshold = st.sidebar.slider("낮음-보통 경계값", 0.5, 3.0, 1.5, 0.1, key="risk_low_boundary")
             medium_threshold = st.sidebar.slider("보통-높음 경계값", 2.0, 5.0, 3.0, 0.1, key="risk_medium_boundary") 
             high_threshold = st.sidebar.slider("높음-매우높음 경계값", 4.0, 7.0, 5.0, 0.1, key="risk_high_boundary")
