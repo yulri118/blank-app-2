@@ -82,10 +82,6 @@ def remove_future_dates(df, date_col="date"):
     return df
 
 # ---------------------------
-# 공개 데이터: Our World in Data PM2.5
-# 출처 주석: https://ourworldindata.org/grapher/average-exposure-pm25-pollution.csv
-# ---------------------------
-# ---------------------------
 # 공개 데이터: 로컬 CSV 사용
 # ---------------------------
 DATA_PATH_OWID = "average-exposure-pm25-pollution.csv"  # 로컬 파일
@@ -236,14 +232,14 @@ TABS = [
     "제언 및 행동"
 ]
 
-tabs = st.tabs(TABS)
-
 # 상단 문제 제기(피드백6 텍스트로 교체)
 st.markdown("# 실내 공기질과 실외 공기질: 청소년 건강을 위한 데이터 비교")
 st.markdown(
     "현대 사회에서 사람들은 생활 시간의 대부분을 실내 공간에서 보낸다. 그러나 대기 오염에 대한 논의는 주로 실외 환경, 즉 미세먼지나 황사와 같은 외부 요인에 집중되어 있다. 이에 비해 실내 공기질은 상대적으로 관심을 덜 받아 왔으며, 그 위험성과 건강에 미치는 영향 또한 충분히 다뤄지지 않았다. 특히 청소년은 학교와 가정 등 제한된 공간에서 장시간 생활하기 때문에 실내 공기질의 영향을 직접적으로 받을 수밖에 없다. 본 보고서는 실내와 실외 공기질의 차이를 데이터로 비교·분석하고, 청소년의 건강 및 학습 환경에 미치는 영향을 검토하며, 이를 개선하기 위한 대응 방안을 제안하고자 한다."
 )
 st.markdown("---")
+
+tabs = st.tabs(TABS)
 
 # ---------- 탭0: 전세계 PM2.5 (지도) ----------
 with tabs[0]:
@@ -276,7 +272,7 @@ with tabs[0]:
     df_pm = remove_future_dates(df_pm, date_col="year")
 
     st.sidebar.header("공개 데이터 설정")
-     years = sorted(df_pm["year"].unique()) if "year" in df_pm.columns else []
+    years = sorted(df_pm["year"].unique()) if "year" in df_pm.columns else []
     if len(years) == 0:
         st.warning("표시할 연도 데이터가 없습니다.")
         year_choice = None # year_choice가 None이 될 수 있도록 초기화
@@ -299,36 +295,6 @@ with tabs[0]:
         st.sidebar.download_button("처리된 공개 데이터 다운로드 (CSV)", data=df_pm.to_csv(index=False).encode("utf-8"), file_name="owid_pm25_processed.csv", mime="text/csv")
 
         if animate and df_pm["year"].nunique() > 1: # 애니메이션 조건도 2개 이상의 연도일 때만 작동하도록 수정
-            fig = px.choropleth(
-                df_pm,
-                locations="iso_alpha",
-                color="value",
-                hover_name="country",
-                animation_frame="year",
-                range_color=(vmin, vmax),
-                labels={"value":"PM2.5 µg/m³"},
-                projection="natural earth"
-            )
-            fig.update_layout(coloraxis_colorbar=dict(title="PM2.5 µg/m³"))
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            df_sel = df_pm[df_pm["year"] == int(year_choice)]
-            if df_sel.empty:
-                st.warning("선택한 연도에 데이터가 없습니다.")
-            else:
-                fig = px.choropleth(
-                    df_sel,
-                    locations="iso_alpha",
-                    color="value",
-                    hover_name="country",
-                    range_color=(vmin, vmax),
-                    labels={"value":"PM2.5 µg/m³"},
-                    projection="natural earth"
-                )
-                fig.update_layout(title_text=f"PM2.5 평균 노출 {year_choice}", coloraxis_colorbar=dict(title="PM2.5 µg/m³"))
-                st.plotly_chart(fig, use_container_width=True)
-
-        if animate and df_pm["year"].nunique() > 1:
             fig = px.choropleth(
                 df_pm,
                 locations="iso_alpha",
